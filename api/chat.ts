@@ -1,4 +1,4 @@
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 100 };
 
 const SYSTEM_PROMPT = `You are Emma, a high-end sales consultant working for Nexora — a premium AI automation agency that designs, trains, and deploys AI employees for businesses.
 
