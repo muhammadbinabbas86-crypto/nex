@@ -82,9 +82,9 @@ export default async function handler(req: Request): Promise<Response> {
     });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'OPENAI_API_KEY is not configured.' }), {
+    return new Response(JSON.stringify({ error: 'GROQ_API_KEY is not configured.' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -111,11 +111,14 @@ export default async function handler(req: Request): Promise<Response> {
     ...sanitized,
   ];
 
-  const openai = new OpenAI({ apiKey });
+  const openai = new OpenAI({
+    apiKey,
+    baseURL: 'https://api.groq.com/openai/v1',
+  });
 
   try {
     const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'llama-3.3-70b-versatile',
       messages,
       stream: true,
       temperature: 0.7,
