@@ -1,4 +1,4 @@
-export const config = { maxDuration: 100 };
+export const config = { maxDuration: 60 };
 
 const SYSTEM_PROMPT = `You are Emma, a high-end sales consultant working for Nexora — a premium AI automation agency that designs, trains, and deploys AI employees for businesses.
 
@@ -110,9 +110,13 @@ export default async function handler(req: Request): Promise<Response> {
   ];
 
   let groqResponse: Response;
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), 20000);
+
   try {
     groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
+      signal: timeoutController.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
@@ -125,9 +129,18 @@ export default async function handler(req: Request): Promise<Response> {
         max_tokens: 500,
       }),
     });
+    clearTimeout(timeoutId);
   } catch (err) {
+    clearTimeout(timeoutId);
+    const isAbort = (err as Error).name === 'AbortError';
     return new Response(
-      JSON.stringify({ error: 'Failed to reach Groq.', detail: (err as Error).message }),
+      JSON.stringify({
+        error: isAbort
+          ? 'Request to Groq timed out after 20 seconds (network/egress issue).'
+          : 'Failed to reach Groq.',
+        detail: (err as Error).message,
+        name: (err as Error).name,
+      }),
       { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
