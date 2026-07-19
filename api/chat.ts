@@ -1,5 +1,3 @@
-import OpenAI from 'openai';
-
 export const config = { maxDuration: 60 };
 
 const SYSTEM_PROMPT = `You are Emma, a high-end sales consultant working for Nexora — a premium AI automation agency that designs, trains, and deploys AI employees for businesses.
@@ -111,57 +109,92 @@ export default async function handler(req: Request): Promise<Response> {
     ...sanitized,
   ];
 
-  const openai = new OpenAI({
-    apiKey,
-    baseURL: 'https://api.groq.com/openai/v1',
-  });
-
+  let groqResponse: Response;
   try {
-    const stream = await openai.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages,
-      stream: true,
-      temperature: 0.7,
-      max_tokens: 500,
-    });
-
-    const readable = new ReadableStream({
-      async start(controller) {
-        controller.enqueue(sseChunk(JSON.stringify({ role: 'assistant' })));
-        try {
-          for await (const chunk of stream) {
-            const delta = chunk.choices?.[0]?.delta?.content ?? '';
-            if (delta) {
-              controller.enqueue(
-                sseChunk(JSON.stringify({ choices: [{ delta: { content: delta } }] })),
-              );
-            }
-          }
-          controller.enqueue(sseChunk('[DONE]'));
-        } catch (err) {
-          controller.enqueue(sseChunk(JSON.stringify({ error: (err as Error).message })));
-        } finally {
-          controller.close();
-        }
-      },
-    });
-
-    return new Response(readable, {
-      status: 200,
+    groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
       headers: {
-        ...corsHeaders,
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
       },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 500,
+      }),
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: 'OpenAI request failed.', detail: (err as Error).message }),
-      {
-        status: 502,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
+      JSON.stringify({ error: 'Failed to reach Groq.', detail: (err as Error).message }),
+      { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
+
+  if (!groqResponse.ok || !groqResponse.body) {
+    const errText = await groqResponse.text().catch(() => 'Unknown error');
+    return new Response(
+      JSON.stringify({ error: 'Groq request failed.', status: groqResponse.status, detail: errText }),
+      { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  const readable = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(sseChunk(JSON.stringify({ role: 'assistant' })));
+
+      const reader = groqResponse.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const data = trimmed.slice(5).trim();
+
+            if (data === '[DONE]') {
+              controller.enqueue(sseChunk('[DONE]'));
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content ?? '';
+              if (delta) {
+                controller.enqueue(
+                  sseChunk(JSON.stringify({ choices: [{ delta: { content: delta } }] })),
+                );
+              }
+            } catch {
+              // skip lines that aren't valid JSON
+            }
+          }
+        }
+      } catch (err) {
+        controller.enqueue(sseChunk(JSON.stringify({ error: (err as Error).message })));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
 }
